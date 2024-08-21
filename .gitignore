@@ -1,0 +1,9 @@
+.vscode/
+build/
+.cache/
+.clangd/
+.vscode/
+bin/
+third_party/bin/
+third_party/lib/
+third_party/include/gflags/
