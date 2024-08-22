@@ -1,0 +1,1 @@
+../third_party/bin/protoc --cpp_out=./ ./scheduler.proto

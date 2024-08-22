@@ -1,0 +1,16 @@
+Language:     Cpp
+BasedOnStyle: Google
+ColumnLimit:  120
+IndentWidth:  4
+NamespaceIndentation: All
+TabWidth:  4
+BreakBeforeBraces: Custom
+BraceWrapping:
+    AfterEnum: true
+    AfterStruct: true
+    AfterCaseLabel: true
+    AfterClass: true
+    AfterControlStatement: Always
+    AfterFunction: true
+    AfterNamespace: true
+    BeforeLambdaBody: true

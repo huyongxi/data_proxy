@@ -9,7 +9,7 @@ set(CMAKE_CXX_STANDARD_REQUIRED ON)
 ###################################################################
 #第一次编译打开Build_Third_Party 编译第三方库 之后关闭该选项
 
-set(Build_Third_Party ON)
+set(Build_Third_Party OFF)
 set(CMAKE_BUILD_TYPE_COPY)
 if (Build_Third_Party)
     message("编译第三方库")
@@ -31,17 +31,19 @@ endif()
 
 if (Build_Third_Party)
     set(CMAKE_BUILD_TYPE ${CMAKE_BUILD_TYPE_COPY})
-    set(EXECUTABLE_OUTPUT_PATH ${CMAKE_SOURCE_DIR}/bin)
 endif()
 
 ######################################################################
 
+set(EXECUTABLE_OUTPUT_PATH ${CMAKE_SOURCE_DIR}/bin)
+
 if(CMAKE_COMPILER_IS_GNUCXX OR CMAKE_CXX_COMPILER_ID MATCHES "Clang")
-  add_compile_options(-Wall -Wextra -Wpedantic)
+  add_compile_options(-Wall -Wextra)
 endif()
 
 
 include_directories(${CMAKE_SOURCE_DIR}/third_party/protobuf/src)
+include_directories(${CMAKE_SOURCE_DIR}/third_party/protobuf/third_party/abseil-cpp)
 include_directories(${CMAKE_SOURCE_DIR}/third_party/mosquitto/include)
 include_directories(${CMAKE_SOURCE_DIR}/third_party/mosquitto/lib/cpp)
 include_directories(${CMAKE_SOURCE_DIR}/third_party/fmt/include)
@@ -53,12 +55,25 @@ find_package(ament_cmake REQUIRED)
 # further dependencies manually.
 # find_package(<dependency> REQUIRED)
 find_package(rclcpp REQUIRED)
+find_package(std_msgs REQUIRED)
 
-add_executable(data_proxy src/data_proxy.cpp)
+aux_source_directory(${CMAKE_CURRENT_SOURCE_DIR}/src SRC)
+aux_source_directory(${CMAKE_CURRENT_SOURCE_DIR}/src/logic SRC)
+
+add_executable(data_proxy ${SRC})
 target_include_directories(data_proxy PUBLIC
   $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>
   $<INSTALL_INTERFACE:include>)
-target_compile_features(data_proxy PUBLIC c_std_99 cxx_std_17)  # Require C99 and C++17
+#target_compile_features(data_proxy PUBLIC c_std_99 cxx_std_17)  # Require C99 and C++17
+
+target_include_directories(data_proxy PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/include/data_proxy)
+target_link_directories(data_proxy PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/third_party/lib)
+
+target_link_libraries(data_proxy
+	fmt
+  mosquittopp
+)
+ament_target_dependencies(data_proxy rclcpp std_msgs)
 
 install(TARGETS data_proxy
   DESTINATION lib/${PROJECT_NAME})

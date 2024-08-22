@@ -1,0 +1,14 @@
+syntax = "proto3";
+
+package scheduler;
+
+
+
+
+//车辆调度请求
+//platform/vehicle/scheduling_request/vehicle_uid
+message VehicleSchedulingRequest
+{
+    uint32 areaId = 1;          //区域id
+    string roadsideId = 2;     //路侧设备id
+}
