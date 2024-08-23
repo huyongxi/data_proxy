@@ -1,51 +1,41 @@
 #pragma once
 #include <atomic>
-#include <mutex>
-#include <shared_mutex>
 #include <condition_variable>
-#include "coroutine.h"
-#include <sys/types.h>
-#include <unordered_map>
 #include <memory>
-#include <string>
-#include <vector>
-#include <thread>
-#include <list>
-#include <optional>
+#include <mutex>
 #include <queue>
-#include <iostream>
-#include "concurrentqueue.h"
+#include <shared_mutex>
+#include <string>
+#include <thread>
+#include <unordered_map>
+#include <functional>
 #include "co_task.h"
+#include "concurrentqueue.h"
+#include "coroutine.h"
 
 using std::coroutine_handle;
 
 using CoHandleWithPriority = std::pair<coroutine_handle<CoTask::promise_type>, uint8_t>;
-template<>
+template <>
 struct std::less<CoHandleWithPriority>
 {
-    bool operator()( const CoHandleWithPriority& lhs, const CoHandleWithPriority& rhs ) const
+    bool operator()(const CoHandleWithPriority& lhs, const CoHandleWithPriority& rhs) const
     {
         return lhs.second < rhs.second;
     }
 };
 
-
 class CoExecutor
 {
-    public:
-    CoExecutor(int thread_num):thread_num_(thread_num)
-    {
-    }
+   public:
+    CoExecutor(int thread_num) : thread_num_(thread_num) {}
     void start()
     {
         if (thread_num_ < 1) thread_num_ = 1;
         thread_pool_.reserve(thread_num_);
         for (int i = 0; i < thread_num_; ++i)
         {
-            thread_pool_.emplace_back([this]()
-            {
-                loop_resume_coroutine();
-            });
+            thread_pool_.emplace_back([this]() { loop_resume_coroutine(); });
         }
     }
 
@@ -68,8 +58,8 @@ class CoExecutor
 
     bool resume_coroutine(const coroutine_handle<CoTask::promise_type>& handle, uint8_t priority = 0)
     {
-         if (handle.promise().state_ == CoState::StopState)
-         {
+        if (handle.promise().state_ == CoState::StopState)
+        {
             handle.promise().state_ = CoState::QueueResume;
             {
                 std::lock_guard lk(mutex_);
@@ -80,13 +70,13 @@ class CoExecutor
                 }
             }
             return true;
-         }else 
-         {
+        } else
+        {
             return false;
-         }
+        }
     }
 
-    private:
+   private:
     void loop_resume_coroutine()
     {
         CoHandleWithPriority co_handle;
@@ -94,7 +84,7 @@ class CoExecutor
         {
             std::unique_lock lk(mutex_);
             ++wait_thread_num;
-            cv_.wait(lk, [this](){return queue_.size() > 0 || stop_;});
+            cv_.wait(lk, [this]() { return queue_.size() > 0 || stop_; });
             --wait_thread_num;
             if (stop_)
             {
@@ -107,7 +97,8 @@ class CoExecutor
             co_handle.first.resume();
         }
     }
-    private:
+
+   private:
     std::priority_queue<CoHandleWithPriority> queue_;
     std::vector<std::thread> thread_pool_;
     int thread_num_;
@@ -117,18 +108,14 @@ class CoExecutor
     bool stop_ = false;
 };
 
-
-template<typename T>
+template <typename T>
 class MessageBus;
 
-template<typename T>
+template <typename T>
 class SharedMessageAwait
 {
-    public:
-    bool await_ready()
-    {
-        return queue_->try_dequeue(data_);
-    }
+   public:
+    bool await_ready() { return queue_->try_dequeue(data_); }
     void await_suspend(coroutine_handle<CoTask::promise_type> handle)
     {
         handle_ = handle;
@@ -137,24 +124,19 @@ class SharedMessageAwait
     }
 
     T&& await_resume()
-    { 
+    {
         handle_.promise().state_ = CoState::NormalState;
         return std::move(data_);
     }
     ~SharedMessageAwait();
-    private:
-    using IterType = typename std::list<SharedMessageAwait<T>*>::const_iterator;
-    SharedMessageAwait(MessageBus<T>* message_bus, CoExecutor* co_executor, const std::string& wait_message_name, 
-        std::shared_ptr<moodycamel::ConcurrentQueue<T>> queue = nullptr);
-    SharedMessageAwait<T> clone()
-    {
-        return {message_bus_, co_executor_, wait_message_name_, queue_};
-    }
 
-    bool push_message(T data)
-    {
-        return queue_->enqueue(std::move(data));
-    }
+   private:
+    using IterType = typename std::unordered_multimap<std::string, SharedMessageAwait<T>*>::const_iterator;
+    SharedMessageAwait(MessageBus<T>* message_bus, CoExecutor* co_executor, const std::string& wait_message_name,
+                       std::shared_ptr<moodycamel::ConcurrentQueue<T>> queue = nullptr);
+    SharedMessageAwait<T> clone() { return {message_bus_, co_executor_, wait_message_name_, queue_}; }
+
+    bool push_message(T data) { return queue_->enqueue(std::move(data)); }
     bool resume_one_coroutine(const T& data)
     {
         if (!handle_ || handle_.promise().await != this)
@@ -178,14 +160,11 @@ class SharedMessageAwait
     T data_;
     IterType iter_;
 };
-template<typename T>
+template <typename T>
 class MessageAwait
 {
-    public:
-    bool await_ready()
-    {
-        return queue_.try_dequeue(data_);
-    }
+   public:
+    bool await_ready() { return queue_.try_dequeue(data_); }
     void await_suspend(coroutine_handle<CoTask::promise_type> handle)
     {
         suspend_ = true;
@@ -199,16 +178,17 @@ class MessageAwait
         if (suspend_)
         {
             queue_.try_dequeue(data_);
-        }   
+        }
         suspend_ = false;
         handle_.promise().state_ = CoState::NormalState;
         return std::move(data_);
     }
 
     ~MessageAwait();
-    private:
-    using IterType = typename std::list<MessageAwait<T>*>::const_iterator;
-    
+
+   private:
+    using IterType = typename std::unordered_multimap<std::string, MessageAwait<T>*>::const_iterator;
+
     MessageAwait(MessageBus<T>* message_bus, CoExecutor* co_executor, const std::string& wait_message_name);
 
     bool push_message(T data)
@@ -231,14 +211,11 @@ class MessageAwait
     T data_;
     IterType iter_;
 };
-template<typename T>
-class OnceMessageAwait
+template <typename T>
+class TempMessageAwait
 {
-    public:
-    bool await_ready()
-    {
-        return false;
-    }
+   public:
+    bool await_ready() { return false; }
     void await_suspend(coroutine_handle<CoTask::promise_type> handle)
     {
         handle_ = handle;
@@ -251,13 +228,16 @@ class OnceMessageAwait
         handle_.promise().state_ = CoState::NormalState;
         return std::move(data_);
     }
-    ~OnceMessageAwait();
-    private:
-    using IterType = typename std::list<OnceMessageAwait<T>*>::const_iterator;
-    OnceMessageAwait(MessageBus<T>* message_bus, CoExecutor* co_executor, const std::string& wait_message_name);
+    ~TempMessageAwait();
+
+   private:
+    using IterType = typename std::unordered_multimap<std::string, TempMessageAwait<T>*>::const_iterator;
+    TempMessageAwait(MessageBus<T>* message_bus, CoExecutor* co_executor, const std::string& wait_message_name,
+                     std::function<bool(const T&)>&& filter);
 
     bool push_message(T data)
     {
+        if (!filter_(data)) return false;
         if (!handle_) return false;
         data_ = std::move(data);
         if (handle_.promise().await == this)
@@ -271,47 +251,45 @@ class OnceMessageAwait
     CoExecutor* co_executor_ = nullptr;
     std::string wait_message_name_;
     coroutine_handle<CoTask::promise_type> handle_;
+    std::function<bool(const T& msg)> filter_;
     T data_;
     IterType iter_;
 };
-
 
 enum class AwaitType : uint8_t
 {
     Invalid = 0,
     Shared = 1,
-    Once = 2,
+    Temp = 2,
     Normal = 3,
 };
 
-template<typename T>
+template <typename T>
 struct AwaitTypeTraits
 {
     const static AwaitType value = AwaitType::Invalid;
 };
 
-
-template<typename T>
+template <typename T>
 struct AwaitTypeTraits<SharedMessageAwait<T>>
 {
     const static AwaitType value = AwaitType::Shared;
 };
-template<typename T>
+template <typename T>
 struct AwaitTypeTraits<MessageAwait<T>>
 {
     const static AwaitType value = AwaitType::Normal;
 };
-template<typename T>
-struct AwaitTypeTraits<OnceMessageAwait<T>>
+template <typename T>
+struct AwaitTypeTraits<TempMessageAwait<T>>
 {
-    const static AwaitType value = AwaitType::Once;
+    const static AwaitType value = AwaitType::Temp;
 };
 
-
-template<typename T>
+template <typename T>
 class MessageBus
-{   
-    public:
+{
+   public:
     MessageBus() = default;
     ~MessageBus() = default;
     MessageBus(const MessageBus&) = delete;
@@ -320,10 +298,9 @@ class MessageBus
     SharedMessageAwait<T> create_shared_message_await(CoExecutor* co_executor, const std::string& wait_message_name)
     {
         std::unique_lock lk(shared_message_await_map_mutex_);
-        auto it = shared_message_await_map_.find(wait_message_name);
-        if (it != shared_message_await_map_.end() && it->second.size() > 0)
+        if (auto it = shared_message_await_map_.find(wait_message_name); it != shared_message_await_map_.end())
         {
-            return it->second.front()->clone();
+            return it->second->clone();
         }
         return {this, co_executor, wait_message_name};
     }
@@ -332,50 +309,43 @@ class MessageBus
         std::unique_lock lk(message_await_map_mutex_);
         return {this, co_executor, wait_message_name};
     }
-    OnceMessageAwait<T> create_once_message_await(CoExecutor* co_executor, const std::string& wait_message_name)
+    TempMessageAwait<T> create_temp_message_await(CoExecutor* co_executor, const std::string& wait_message_name, std::function<bool(const T&)>&& filter)
     {
-        std::unique_lock lk(once_message_await_map_mutex_);
-        return {this, co_executor, wait_message_name};
+        std::unique_lock lk(temp_message_await_map_mutex_);
+        return {this, co_executor, wait_message_name, std::move(filter)};
     }
 
-    template<typename Await>
+    template <typename Await>
     typename Await::IterType add_await(Await* await)
     {
         if constexpr (AwaitTypeTraits<Await>::value == AwaitType::Shared)
         {
-            shared_message_await_map_[await->wait_message_name_].push_back(await);
-            return --shared_message_await_map_[await->wait_message_name_].end();
-        }
-        else if constexpr (AwaitTypeTraits<Await>::value == AwaitType::Normal)
+            return shared_message_await_map_.insert({await->wait_message_name_, await});
+        } else if constexpr (AwaitTypeTraits<Await>::value == AwaitType::Normal)
         {
-            message_await_map_[await->wait_message_name_].push_back(await);
-            return --message_await_map_[await->wait_message_name_].end();
-        }
-        else if constexpr (AwaitTypeTraits<Await>::value == AwaitType::Once)
+            return message_await_map_.insert({await->wait_message_name_, await});
+        } else if constexpr (AwaitTypeTraits<Await>::value == AwaitType::Temp)
         {
-            once_message_await_map_[await->wait_message_name_].push_back(await);
-            return --once_message_await_map_[await->wait_message_name_].end();
+            return temp_message_await_map_.insert({await->wait_message_name_, await});
         }
         assert(false);
         return {};
     }
-    template<typename Await>
+    template <typename Await>
     void remove_await(typename Await::IterType iter)
     {
         if constexpr (AwaitTypeTraits<Await>::value == AwaitType::Shared)
         {
             std::unique_lock lk(shared_message_await_map_mutex_);
-            shared_message_await_map_[(*iter)->wait_message_name_].erase(iter);
-        }
-        else if constexpr (AwaitTypeTraits<Await>::value == AwaitType::Normal)
+            shared_message_await_map_.erase(iter);
+        } else if constexpr (AwaitTypeTraits<Await>::value == AwaitType::Normal)
         {
             std::unique_lock lk(message_await_map_mutex_);
-            message_await_map_[(*iter)->wait_message_name_].erase(iter);
-        }
-        else if constexpr (AwaitTypeTraits<Await>::value == AwaitType::Once)
+            message_await_map_.erase(iter);
+        } else if constexpr (AwaitTypeTraits<Await>::value == AwaitType::Temp)
         {
-            std::unique_lock lk(once_message_await_map_mutex_);
-            once_message_await_map_[(*iter)->wait_message_name_].erase(iter);
+            std::unique_lock lk(temp_message_await_map_mutex_);
+            temp_message_await_map_.erase(iter);
         }
         return;
     }
@@ -396,7 +366,7 @@ class MessageBus
         while (!stop_)
         {
             std::unique_lock lk(mutex_);
-            cv_.wait(lk, [this](){return queue_.size_approx() > 0 || stop_;});
+            cv_.wait(lk, [this]() { return queue_.size_approx() > 0 || stop_; });
             lk.unlock();
             co_task.resume();
         }
@@ -406,56 +376,55 @@ class MessageBus
         stop_ = true;
         cv_.notify_all();
     }
-    private:
+
+   private:
     CoTask dispatch_message()
     {
-        while (!stop_) 
+        T data;
+        while (!stop_)
         {
-            T data;
             bool r = queue_.try_dequeue(data);
             if (r)
             {
                 {
                     std::shared_lock lk(shared_message_await_map_mutex_);
-                    auto it = shared_message_await_map_.find(data.name);
-                    if (it != shared_message_await_map_.end() && it->second.size() > 0)
+                    if (shared_message_await_map_.contains(data.name))
                     {
+                        auto range = shared_message_await_map_.equal_range(data.name);
                         bool resume_one = false;
-                        for (auto& await : it->second)
+                        for (auto it = range.first; it != range.second; ++it)
                         {
-                            if (resume_one = await->resume_one_coroutine(data) || resume_one; resume_one)
-                                break;;
+                            if (resume_one = it->second->resume_one_coroutine(data) || resume_one; resume_one) break;
                         }
                         if (!resume_one)
                         {
-                            it->second.front()->push_message(data);
+                            range.first->second->push_message(data);
                         }
                     }
                 }
                 {
                     std::shared_lock lk(message_await_map_mutex_);
-                    auto it = message_await_map_.find(data.name);
-                    if (it != message_await_map_.end() && it->second.size() > 0)
+                    if (message_await_map_.contains(data.name))
                     {
-                        for (auto& await : it->second)
+                        auto range = message_await_map_.equal_range(data.name);
+                        for (auto it = range.first; it != range.second; ++it)
                         {
-                            await->push_message(data);
+                            it->second->push_message(data);
                         }
-                        
                     }
                 }
                 {
-                    std::shared_lock lk(once_message_await_map_mutex_);
-                    auto it = once_message_await_map_.find(data.name);
-                    if (it != once_message_await_map_.end() && it->second.size() > 0)
+                    std::shared_lock lk(temp_message_await_map_mutex_);
+                    if (temp_message_await_map_.contains(data.name))
                     {
-                        for (auto& await : it->second)
+                        auto range = temp_message_await_map_.equal_range(data.name);
+                        for (auto it = range.first; it != range.second; ++it)
                         {
-                            await->push_message(data);
+                            it->second->push_message(data);
                         }
                     }
                 }
-            }else 
+            } else
             {
                 ++suspend_co_num_;
                 co_await StopAwait();
@@ -464,19 +433,16 @@ class MessageBus
         }
     }
 
-    private:
+   private:
     moodycamel::ConcurrentQueue<T> queue_;
     std::mutex mutex_;
     std::condition_variable cv_;
     std::atomic<uint16_t> suspend_co_num_ = 0;
     std::atomic<bool> stop_ = false;
     std::shared_mutex shared_message_await_map_mutex_;
-    std::unordered_map<std::string, std::list<SharedMessageAwait<T>*>> shared_message_await_map_;
+    std::unordered_multimap<std::string, SharedMessageAwait<T>*> shared_message_await_map_;
     std::shared_mutex message_await_map_mutex_;
-    std::unordered_map<std::string, std::list<MessageAwait<T>*>> message_await_map_;
-    std::shared_mutex once_message_await_map_mutex_;
-    std::unordered_map<std::string, std::list<OnceMessageAwait<T>*>> once_message_await_map_;
+    std::unordered_multimap<std::string, MessageAwait<T>*> message_await_map_;
+    std::shared_mutex temp_message_await_map_mutex_;
+    std::unordered_multimap<std::string, TempMessageAwait<T>*> temp_message_await_map_;
 };
-
-
-

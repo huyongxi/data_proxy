@@ -17,6 +17,22 @@ class ILogic
     virtual ~ILogic() {}
 
    protected:
+    SharedMessageAwait<InternalMessage> shared_message_await(const string& msg_name)
+    {
+        return message_bus_->create_shared_message_await(co_executor_, msg_name);
+    }
+    MessageAwait<InternalMessage> message_await(const string& msg_name)
+    {
+        return message_bus_->create_message_await(co_executor_, msg_name);
+    }
+    TempMessageAwait<InternalMessage> temp_message_await(
+        const string& msg_name,
+        function<bool(const InternalMessage& msg)>&& filter = [](const InternalMessage&) { return true; })
+    {
+        return message_bus_->create_temp_message_await(co_executor_, msg_name, std::move(filter));
+    }
+
+   protected:
     MessageBus<InternalMessage>* message_bus_;
     CoExecutor* co_executor_;
     shared_ptr<Ros2Channel> ros2_ptr_;
