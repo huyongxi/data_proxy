@@ -46,7 +46,7 @@ CoTask SchedulerLogic::handle_mqtt_test_topic()
         msg.set__data(imsg.data);
         ros2_ptr_->publish("mqtt2ros2", msg);
 
-        co_await temp_message_await("platform/notify", [](const InternalMessage& msg)
+        co_await temp_message_await("platform/notify", 1, [](const InternalMessage& msg)
         {
             if (msg.data == "112")
             {

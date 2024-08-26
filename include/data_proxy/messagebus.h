@@ -1,6 +1,7 @@
 #pragma once
 #include <atomic>
 #include <condition_variable>
+#include <functional>
 #include <memory>
 #include <mutex>
 #include <queue>
@@ -8,12 +9,9 @@
 #include <string>
 #include <thread>
 #include <unordered_map>
-#include <functional>
+
 #include "co_task.h"
 #include "concurrentqueue.h"
-#include "coroutine.h"
-
-using std::coroutine_handle;
 
 using CoHandleWithPriority = std::pair<coroutine_handle<CoTask::promise_type>, uint8_t>;
 template <>
@@ -133,8 +131,11 @@ class SharedMessageAwait
    private:
     using IterType = typename std::unordered_multimap<std::string, SharedMessageAwait<T>*>::const_iterator;
     SharedMessageAwait(MessageBus<T>* message_bus, CoExecutor* co_executor, const std::string& wait_message_name,
-                       std::shared_ptr<moodycamel::ConcurrentQueue<T>> queue = nullptr);
-    SharedMessageAwait<T> clone() { return {message_bus_, co_executor_, wait_message_name_, queue_}; }
+                       uint8_t priority, std::shared_ptr<moodycamel::ConcurrentQueue<T>> queue = nullptr);
+    SharedMessageAwait<T> clone()
+    {
+        return {message_bus_, co_executor_, wait_message_name_, wait_co_priority_, queue_};
+    }
 
     bool push_message(T data) { return queue_->enqueue(std::move(data)); }
     bool resume_one_coroutine(const T& data)
@@ -143,7 +144,7 @@ class SharedMessageAwait
         {
             return false;
         }
-        bool r = co_executor_->resume_coroutine(handle_);
+        bool r = co_executor_->resume_coroutine(handle_, wait_co_priority_);
         if (r)
         {
             data_ = data;
@@ -159,6 +160,7 @@ class SharedMessageAwait
     bool suspend_ = false;
     T data_;
     IterType iter_;
+    uint8_t wait_co_priority_ = 0;
 };
 template <typename T>
 class MessageAwait
@@ -189,7 +191,8 @@ class MessageAwait
    private:
     using IterType = typename std::unordered_multimap<std::string, MessageAwait<T>*>::const_iterator;
 
-    MessageAwait(MessageBus<T>* message_bus, CoExecutor* co_executor, const std::string& wait_message_name);
+    MessageAwait(MessageBus<T>* message_bus, CoExecutor* co_executor, const std::string& wait_message_name,
+                 uint8_t priority);
 
     bool push_message(T data)
     {
@@ -197,7 +200,7 @@ class MessageAwait
         bool r = queue_.enqueue(std::move(data));
         if (handle_.promise().await == this)
         {
-            co_executor_->resume_coroutine(handle_);
+            co_executor_->resume_coroutine(handle_, wait_co_priority_);
         }
         return r;
     }
@@ -210,6 +213,7 @@ class MessageAwait
     bool suspend_ = false;
     T data_;
     IterType iter_;
+    uint8_t wait_co_priority_ = 0;
 };
 template <typename T>
 class TempMessageAwait
@@ -233,7 +237,7 @@ class TempMessageAwait
    private:
     using IterType = typename std::unordered_multimap<std::string, TempMessageAwait<T>*>::const_iterator;
     TempMessageAwait(MessageBus<T>* message_bus, CoExecutor* co_executor, const std::string& wait_message_name,
-                     std::function<bool(const T&)>&& filter);
+                     uint8_t priority, std::function<bool(const T&)>&& filter);
 
     bool push_message(T data)
     {
@@ -242,7 +246,7 @@ class TempMessageAwait
         data_ = std::move(data);
         if (handle_.promise().await == this)
         {
-            co_executor_->resume_coroutine(handle_);
+            co_executor_->resume_coroutine(handle_, wait_co_priority_);
         }
         return true;
     }
@@ -251,9 +255,10 @@ class TempMessageAwait
     CoExecutor* co_executor_ = nullptr;
     std::string wait_message_name_;
     coroutine_handle<CoTask::promise_type> handle_;
-    std::function<bool(const T& msg)> filter_;
     T data_;
     IterType iter_;
+    uint8_t wait_co_priority_ = 0;
+    std::function<bool(const T& msg)> filter_;
 };
 
 enum class AwaitType : uint8_t
@@ -295,24 +300,27 @@ class MessageBus
     MessageBus(const MessageBus&) = delete;
     MessageBus& operator=(const MessageBus&) = delete;
 
-    SharedMessageAwait<T> create_shared_message_await(CoExecutor* co_executor, const std::string& wait_message_name)
+    SharedMessageAwait<T> create_shared_message_await(CoExecutor* co_executor, const std::string& wait_message_name,
+                                                      uint8_t priority)
     {
         std::unique_lock lk(shared_message_await_map_mutex_);
         if (auto it = shared_message_await_map_.find(wait_message_name); it != shared_message_await_map_.end())
         {
             return it->second->clone();
         }
-        return {this, co_executor, wait_message_name};
+        return {this, co_executor, wait_message_name, priority};
     }
-    MessageAwait<T> create_message_await(CoExecutor* co_executor, const std::string& wait_message_name)
+    MessageAwait<T> create_message_await(CoExecutor* co_executor, const std::string& wait_message_name,
+                                         uint8_t priority)
     {
         std::unique_lock lk(message_await_map_mutex_);
-        return {this, co_executor, wait_message_name};
+        return {this, co_executor, wait_message_name, priority};
     }
-    TempMessageAwait<T> create_temp_message_await(CoExecutor* co_executor, const std::string& wait_message_name, std::function<bool(const T&)>&& filter)
+    TempMessageAwait<T> create_temp_message_await(CoExecutor* co_executor, const std::string& wait_message_name,
+                                                  uint8_t priority, std::function<bool(const T&)>&& filter)
     {
         std::unique_lock lk(temp_message_await_map_mutex_);
-        return {this, co_executor, wait_message_name, std::move(filter)};
+        return {this, co_executor, wait_message_name, priority, std::move(filter)};
     }
 
     template <typename Await>
@@ -360,6 +368,16 @@ class MessageBus
         return r;
     }
 
+    bool push_timer_message(T&& data)
+    {
+        bool r = timer_msg_queue_.enqueue(std::move(data));
+        if (suspend_co_num_ > 0 && r)
+        {
+            cv_.notify_one();
+        }
+        return r;
+    }
+
     void run()
     {
         CoTask co_task = dispatch_message();
@@ -383,7 +401,7 @@ class MessageBus
         T data;
         while (!stop_)
         {
-            bool r = queue_.try_dequeue(data);
+            bool r = timer_msg_queue_.try_dequeue(data) || queue_.try_dequeue(data);
             if (r)
             {
                 {
@@ -435,6 +453,7 @@ class MessageBus
 
    private:
     moodycamel::ConcurrentQueue<T> queue_;
+    moodycamel::ConcurrentQueue<T> timer_msg_queue_;
     std::mutex mutex_;
     std::condition_variable cv_;
     std::atomic<uint16_t> suspend_co_num_ = 0;

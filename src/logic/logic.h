@@ -17,19 +17,19 @@ class ILogic
     virtual ~ILogic() {}
 
    protected:
-    SharedMessageAwait<InternalMessage> shared_message_await(const string& msg_name)
+    SharedMessageAwait<InternalMessage> shared_message_await(const string& msg_name, uint8_t priority = 0)
     {
-        return message_bus_->create_shared_message_await(co_executor_, msg_name);
+        return message_bus_->create_shared_message_await(co_executor_, msg_name, priority);
     }
-    MessageAwait<InternalMessage> message_await(const string& msg_name)
+    MessageAwait<InternalMessage> message_await(const string& msg_name, uint8_t priority = 0)
     {
-        return message_bus_->create_message_await(co_executor_, msg_name);
+        return message_bus_->create_message_await(co_executor_, msg_name, priority);
     }
     TempMessageAwait<InternalMessage> temp_message_await(
-        const string& msg_name,
+        const string& msg_name, uint8_t priority = 0,
         function<bool(const InternalMessage& msg)>&& filter = [](const InternalMessage&) { return true; })
     {
-        return message_bus_->create_temp_message_await(co_executor_, msg_name, std::move(filter));
+        return message_bus_->create_temp_message_await(co_executor_, msg_name, priority, std::move(filter));
     }
 
    protected:

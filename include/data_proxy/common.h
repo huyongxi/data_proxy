@@ -8,6 +8,8 @@
 #include <thread>
 #include <string_view>
 #include <functional>
+#include <chrono>
+#include <cstdint>
 #include <fmt/core.h>
 
 using std::string;
