@@ -47,6 +47,7 @@ include_directories(${CMAKE_SOURCE_DIR}/third_party/protobuf/third_party/abseil-
 include_directories(${CMAKE_SOURCE_DIR}/third_party/mosquitto/include)
 include_directories(${CMAKE_SOURCE_DIR}/third_party/mosquitto/lib/cpp)
 include_directories(${CMAKE_SOURCE_DIR}/third_party/fmt/include)
+include_directories(${CMAKE_SOURCE_DIR}/third_party/asio-1.30.2/include)
 include_directories(${CMAKE_SOURCE_DIR}/third_party/include)
 
 # find dependencies
