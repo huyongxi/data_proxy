@@ -17,10 +17,18 @@ class Ros2Channel : public rclcpp::Node, public ThreadTask
 
     bool init() { return true; }
 
-    virtual void run() override
+    template <typename MessageType>
+    bool will_pulish(const string& topic, const rclcpp::QoS& qos)
     {
-        rclcpp::spin(shared_from_this());  // block
-        rclcpp::shutdown();
+        std::lock_guard lk(publishers_mutex_);
+        if (!publishers.contains(topic))
+        {
+            publishers[topic] = create_publisher<MessageType>(topic, qos);
+            return true;
+        } else
+        {
+            return false;
+        }
     }
 
     template <typename MessageType>
@@ -40,16 +48,16 @@ class Ros2Channel : public rclcpp::Node, public ThreadTask
     }
 
     template <typename MessageType>
-    bool subscribe(const string& topic)
+    bool subscribe(const string& topic, const rclcpp::QoS& qos)
     {
-        // using SubscribeType = rclcpp::Subscription<MessageType, std::allocator<void>>;
+        std::lock_guard lk(subscribers_mutex_);
         if (subscribers.contains(topic))
         {
             RCLCPP_WARN(get_logger(), fmt::format("already subscribe topic: {}", topic).c_str());
             return false;
         }
         subscribers[topic] = create_subscription<MessageType>(
-            topic, rclcpp::QoS(10),
+            topic, qos,
             [topic, self = std::dynamic_pointer_cast<Ros2Channel>(shared_from_this()),
              serializer = rclcpp::Serialization<MessageType>(),
              serialized_msg = rclcpp::SerializedMessage()](const MessageType& message)
@@ -67,8 +75,16 @@ class Ros2Channel : public rclcpp::Node, public ThreadTask
     MessageBus<InternalMessage>* get_message_bus() { return message_bus_; }
 
    private:
+    virtual void run() override
+    {
+        rclcpp::spin(shared_from_this());  // block
+        rclcpp::shutdown();
+    }
+
+   private:
     unordered_map<string, shared_ptr<void>> publishers;
     std::mutex publishers_mutex_;
     unordered_map<string, shared_ptr<void>> subscribers;
+    std::mutex subscribers_mutex_;
     MessageBus<InternalMessage>* message_bus_;
 };

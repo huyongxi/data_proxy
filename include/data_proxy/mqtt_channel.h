@@ -12,7 +12,7 @@
             return false;                          \
         } 
 
-class MqttChannel : public std::enable_shared_from_this<MqttChannel>, public mosqpp::mosquittopp, public ThreadTask
+class MqttChannel : public mosqpp::mosquittopp, public ThreadTask
 {
     public:
 
@@ -64,11 +64,6 @@ class MqttChannel : public std::enable_shared_from_this<MqttChannel>, public mos
         return true;
     }
 
-    virtual void run() override
-    {
-        loop_forever();
-    }
-
     virtual void on_connect(int rc) override
     {
         std::cout << "on connect " << mosqpp::connack_string(rc) << std::endl;
@@ -105,6 +100,12 @@ class MqttChannel : public std::enable_shared_from_this<MqttChannel>, public mos
     MessageBus<InternalMessage>* get_message_bus()
     {
        return message_bus_;
+    }
+
+    private:
+    virtual void run() override
+    {
+        loop_forever();
     }
 
     private:

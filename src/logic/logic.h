@@ -4,12 +4,14 @@
 #include "messagebus.h"
 #include "mqtt_channel.h"
 #include "ros2_channel.h"
+#include "timer_mgr.h"
 
 class ILogic
 {
    public:
-    ILogic(CoExecutor* co_executor, shared_ptr<Ros2Channel> ros2_ptr, shared_ptr<MqttChannel> mqtt_ptr)
-        : co_executor_(co_executor), ros2_ptr_(ros2_ptr), mqtt_ptr_(mqtt_ptr)
+    ILogic(CoExecutor* co_executor, TimerMgr* timer_mgr, shared_ptr<Ros2Channel> ros2_ptr,
+           shared_ptr<MqttChannel> mqtt_ptr)
+        : co_executor_(co_executor), timer_mgr_(timer_mgr), ros2_ptr_(ros2_ptr), mqtt_ptr_(mqtt_ptr)
     {
         message_bus_ = ros2_ptr_->get_message_bus();
     }
@@ -35,6 +37,7 @@ class ILogic
    protected:
     MessageBus<InternalMessage>* message_bus_;
     CoExecutor* co_executor_;
+    TimerMgr* timer_mgr_;
     shared_ptr<Ros2Channel> ros2_ptr_;
     shared_ptr<MqttChannel> mqtt_ptr_;
 };

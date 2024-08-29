@@ -16,7 +16,9 @@ class ThreadTask
     {
         thread_ = std::thread([this](){this->run();});
     }
+    private:
     virtual void run() = 0;
+
     private:
     std::thread thread_;
 };

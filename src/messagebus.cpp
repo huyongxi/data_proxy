@@ -1,7 +1,5 @@
 #include "messagebus.h"
 
-#include "data_proxy/common.h"
-
 template <typename T>
 SharedMessageAwait<T>::SharedMessageAwait(MessageBus<T>* message_bus, CoExecutor* co_executor,
                                           const std::string& wait_message_name, uint8_t priority,

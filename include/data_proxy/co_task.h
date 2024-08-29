@@ -1,8 +1,19 @@
 #pragma once
 #include <cstdint>
 #include <exception>
-#include "coroutine.h"
 #include <atomic>
+#include <fmt/core.h>
+#include <iostream>
+#include "coroutine.h"
+
+#if __has_builtin(__builtin_source_location)
+#include <source_location>
+using std::source_location;
+#else
+#include <experimental/source_location>
+using std::experimental::source_location;
+#endif
+
 
 using std::coroutine_handle;
 using std::suspend_always;
@@ -11,11 +22,10 @@ using std::suspend_never;
 
 enum class CoState : uint8_t
 {
-    NormalState = 0,
+    RuningState = 0,
     ExceptionState = 1,
     StopState = 2,
     QueueResume = 3,
-    TimeoutState = 4,
 };
 
 
@@ -30,6 +40,16 @@ class CoTask
     class promise_type
     {
         public:
+        promise_type(const source_location location = source_location::current())
+        {
+            std::cout << fmt::format("create coroutine {} from {}:{}:{}", (void*)this, location.file_name(),
+                      location.line(), location.function_name()) << std::endl;
+        }
+        ~promise_type()
+        {
+            std::cout << fmt::format("destroy coroutine {}", (void*)this) << std::endl;
+        }
+        
         CoTask get_return_object()
         {
             return {*this};
@@ -66,32 +86,8 @@ class CoTask
         // }
 
         std::exception_ptr exception_;
-        std::atomic<CoState> state_{CoState::NormalState};
+        std::atomic<CoState> state_{CoState::RuningState};
         void* await = nullptr;
     };
     promise_type& promise_;
-};
-
-class StopAwait
-{
-    public:
-
-    bool await_ready()
-    {
-        return false;
-    }
-
-    void await_suspend(coroutine_handle<CoTask::promise_type> handle)
-    {
-        handle.promise().state_ = CoState::StopState;
-        handle_ = handle;
-    }
-
-    void await_resume()
-    {
-        handle_.promise().state_ = CoState::NormalState;
-    }
-
-    private:
-    coroutine_handle<CoTask::promise_type> handle_;
 };

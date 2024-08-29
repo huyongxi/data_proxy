@@ -25,4 +25,5 @@ struct InternalMessage
 {
     string name;
     string data;
+    bool is_timeout_msg{false};
 };

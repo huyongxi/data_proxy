@@ -12,6 +12,7 @@
 
 #include "co_task.h"
 #include "concurrentqueue.h"
+#include "data_proxy/common.h"
 
 using CoHandleWithPriority = std::pair<coroutine_handle<CoTask::promise_type>, uint8_t>;
 template <>
@@ -54,23 +55,16 @@ class CoExecutor
         }
     }
 
-    bool resume_coroutine(const coroutine_handle<CoTask::promise_type>& handle, uint8_t priority = 0)
+    void resume_coroutine(const coroutine_handle<CoTask::promise_type>& handle, uint8_t priority = 0)
     {
-        if (handle.promise().state_ == CoState::StopState)
+        handle.promise().state_ = CoState::QueueResume;
         {
-            handle.promise().state_ = CoState::QueueResume;
+            std::lock_guard lk(mutex_);
+            queue_.push({handle, priority});
+            if (wait_thread_num > 0)
             {
-                std::lock_guard lk(mutex_);
-                queue_.push({handle, priority});
-                if (wait_thread_num > 0)
-                {
-                    cv_.notify_one();
-                }
+                cv_.notify_one();
             }
-            return true;
-        } else
-        {
-            return false;
         }
     }
 
@@ -113,6 +107,9 @@ template <typename T>
 class SharedMessageAwait
 {
    public:
+    SharedMessageAwait(const SharedMessageAwait&) = delete;
+    SharedMessageAwait& operator=(const SharedMessageAwait&) = delete;
+
     bool await_ready() { return queue_->try_dequeue(data_); }
     void await_suspend(coroutine_handle<CoTask::promise_type> handle)
     {
@@ -123,7 +120,7 @@ class SharedMessageAwait
 
     T&& await_resume()
     {
-        handle_.promise().state_ = CoState::NormalState;
+        handle_.promise().state_ = CoState::RuningState;
         return std::move(data_);
     }
     ~SharedMessageAwait();
@@ -144,14 +141,16 @@ class SharedMessageAwait
         {
             return false;
         }
-        bool r = co_executor_->resume_coroutine(handle_, wait_co_priority_);
-        if (r)
+        if (handle_.promise().state_ == CoState::StopState)
         {
             data_ = data;
+            co_executor_->resume_coroutine(handle_, wait_co_priority_);
+            return true;
         }
-        return r;
+        return false;
     }
     friend class MessageBus<T>;
+    friend class TimerMgr;
     std::shared_ptr<moodycamel::ConcurrentQueue<T>> queue_;
     MessageBus<T>* message_bus_ = nullptr;
     CoExecutor* co_executor_ = nullptr;
@@ -166,6 +165,8 @@ template <typename T>
 class MessageAwait
 {
    public:
+    MessageAwait(const MessageAwait&) = delete;
+    MessageAwait& operator=(const MessageAwait&) = delete;
     bool await_ready() { return queue_.try_dequeue(data_); }
     void await_suspend(coroutine_handle<CoTask::promise_type> handle)
     {
@@ -179,10 +180,15 @@ class MessageAwait
     {
         if (suspend_)
         {
-            queue_.try_dequeue(data_);
+            int try_dq = 0;
+            while (!queue_.try_dequeue(data_))
+            {
+                ++try_dq;
+            };
+            if (try_dq > 0) std::cout << "try_dq: " << try_dq << std::endl;
         }
         suspend_ = false;
-        handle_.promise().state_ = CoState::NormalState;
+        handle_.promise().state_ = CoState::RuningState;
         return std::move(data_);
     }
 
@@ -198,13 +204,14 @@ class MessageAwait
     {
         if (!handle_) return false;
         bool r = queue_.enqueue(std::move(data));
-        if (handle_.promise().await == this)
+        if (handle_.promise().state_ == CoState::StopState && handle_.promise().await == this)
         {
             co_executor_->resume_coroutine(handle_, wait_co_priority_);
         }
         return r;
     }
     friend class MessageBus<T>;
+    friend class TimerMgr;
     moodycamel::ConcurrentQueue<T> queue_;
     MessageBus<T>* message_bus_ = nullptr;
     CoExecutor* co_executor_ = nullptr;
@@ -219,6 +226,9 @@ template <typename T>
 class TempMessageAwait
 {
    public:
+    TempMessageAwait(const TempMessageAwait&) = delete;
+    TempMessageAwait& operator=(const TempMessageAwait&) = delete;
+
     bool await_ready() { return false; }
     void await_suspend(coroutine_handle<CoTask::promise_type> handle)
     {
@@ -229,7 +239,7 @@ class TempMessageAwait
 
     T&& await_resume()
     {
-        handle_.promise().state_ = CoState::NormalState;
+        handle_.promise().state_ = CoState::RuningState;
         return std::move(data_);
     }
     ~TempMessageAwait();
@@ -241,16 +251,40 @@ class TempMessageAwait
 
     bool push_message(T data)
     {
-        if (!filter_(data)) return false;
+        if (!filter_(data) && !is_timeout_msg(data)) return false;
         if (!handle_) return false;
-        data_ = std::move(data);
-        if (handle_.promise().await == this)
+        if (handle_.promise().state_ == CoState::StopState && handle_.promise().await == this)
         {
+            data_ = std::move(data);
             co_executor_->resume_coroutine(handle_, wait_co_priority_);
+            remove_timer();
+            return true;
         }
-        return true;
+        return false;
     }
+
+    bool is_timeout_msg(const T& msg)
+    {
+        if constexpr (std::is_same_v<T, InternalMessage>)
+        {
+            return msg.is_timeout_msg;
+        }
+        return false;
+    }
+
+    void remove_timer()
+    {
+        if (timer_id_ > 0)
+        {
+            InternalMessage imsg;
+            imsg.name = "__RemoveTimer";
+            imsg.data = std::to_string(timer_id_);
+            message_bus_->push_message(std::move(imsg));
+        }
+    }
+
     friend class MessageBus<T>;
+    friend class TimerMgr;
     MessageBus<T>* message_bus_ = nullptr;
     CoExecutor* co_executor_ = nullptr;
     std::string wait_message_name_;
@@ -259,6 +293,7 @@ class TempMessageAwait
     IterType iter_;
     uint8_t wait_co_priority_ = 0;
     std::function<bool(const T& msg)> filter_;
+    uint64_t timer_id_ = 0;
 };
 
 enum class AwaitType : uint8_t
@@ -296,9 +331,18 @@ class MessageBus
 {
    public:
     MessageBus() = default;
-    ~MessageBus() = default;
     MessageBus(const MessageBus&) = delete;
     MessageBus& operator=(const MessageBus&) = delete;
+
+    ~MessageBus()
+    {
+        if (!stop_)
+        {
+            stop();
+        }
+        if (dispatch_thread_.joinable()) dispatch_thread_.join();
+        if (high_priority_msg_dispatch_thread_.joinable()) high_priority_msg_dispatch_thread_.join();
+    }
 
     SharedMessageAwait<T> create_shared_message_await(CoExecutor* co_executor, const std::string& wait_message_name,
                                                       uint8_t priority)
@@ -361,33 +405,41 @@ class MessageBus
     bool push_message(T&& data)
     {
         bool r = queue_.enqueue(std::move(data));
-        if (suspend_co_num_ > 0 && r)
+        if (r)
         {
-            cv_.notify_one();
+            cv_.notify_all();
         }
         return r;
     }
 
-    bool push_timer_message(T&& data)
+    bool push_high_priority_message(T&& data)
     {
-        bool r = timer_msg_queue_.enqueue(std::move(data));
-        if (suspend_co_num_ > 0 && r)
+        bool r = high_priority_queue_.enqueue(std::move(data));
+        if (r)
         {
-            cv_.notify_one();
+            cv_.notify_all();
         }
         return r;
     }
 
-    void run()
+    void run(moodycamel::ConcurrentQueue<T>& queue)
     {
-        CoTask co_task = dispatch_message();
+        CoTask co_task = dispatch_message(queue);
         while (!stop_)
         {
             std::unique_lock lk(mutex_);
-            cv_.wait(lk, [this]() { return queue_.size_approx() > 0 || stop_; });
+            cv_.wait(lk, [&, this]() { return queue.size_approx() > 0 || stop_; });
             lk.unlock();
             co_task.resume();
         }
+    }
+
+    void start()
+    {
+        dispatch_thread_ = std::thread([this]() { run(queue_); });
+        high_priority_msg_dispatch_thread_ = std::thread([this]() { run(high_priority_queue_); });
+        dispatch_thread_.join();
+        high_priority_msg_dispatch_thread_.join();
     }
     void stop()
     {
@@ -396,12 +448,12 @@ class MessageBus
     }
 
    private:
-    CoTask dispatch_message()
+    CoTask dispatch_message(moodycamel::ConcurrentQueue<T>& queue)
     {
         T data;
         while (!stop_)
         {
-            bool r = timer_msg_queue_.try_dequeue(data) || queue_.try_dequeue(data);
+            bool r = queue.try_dequeue(data);
             if (r)
             {
                 {
@@ -412,7 +464,10 @@ class MessageBus
                         bool resume_one = false;
                         for (auto it = range.first; it != range.second; ++it)
                         {
-                            if (resume_one = it->second->resume_one_coroutine(data) || resume_one; resume_one) break;
+                            if ((resume_one = it->second->resume_one_coroutine(data)))
+                            {
+                                break;
+                            }
                         }
                         if (!resume_one)
                         {
@@ -444,19 +499,16 @@ class MessageBus
                 }
             } else
             {
-                ++suspend_co_num_;
-                co_await StopAwait();
-                --suspend_co_num_;
+                co_await std::suspend_always();
             }
         }
     }
 
    private:
     moodycamel::ConcurrentQueue<T> queue_;
-    moodycamel::ConcurrentQueue<T> timer_msg_queue_;
+    moodycamel::ConcurrentQueue<T> high_priority_queue_;
     std::mutex mutex_;
     std::condition_variable cv_;
-    std::atomic<uint16_t> suspend_co_num_ = 0;
     std::atomic<bool> stop_ = false;
     std::shared_mutex shared_message_await_map_mutex_;
     std::unordered_multimap<std::string, SharedMessageAwait<T>*> shared_message_await_map_;
@@ -464,4 +516,6 @@ class MessageBus
     std::unordered_multimap<std::string, MessageAwait<T>*> message_await_map_;
     std::shared_mutex temp_message_await_map_mutex_;
     std::unordered_multimap<std::string, TempMessageAwait<T>*> temp_message_await_map_;
+    std::thread dispatch_thread_;
+    std::thread high_priority_msg_dispatch_thread_;
 };
